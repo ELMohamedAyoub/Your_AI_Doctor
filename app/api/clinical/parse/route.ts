@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { openai } from "@/shared/OpenAiModel";
 import { PrismaClient } from "@/lib/generated/prisma";
+import { detectRedFlags } from "@/lib/redFlagDetector";
 
 const prisma = new PrismaClient();
 
@@ -118,19 +119,16 @@ Return ONLY the JSON object, no additional text.`;
       }
     });
 
-    // Detect and create alert if needed
-    const alertInfo = detectAlertLevel(
-      extractedData.painScore,
-      extractedData.symptoms,
-      extractedData.emotion
-    );
+    // Use advanced red flag detection
+    const redFlagResult = detectRedFlags(transcript, extractedData.painScore);
 
-    if (alertInfo.level !== "NORMAL") {
+    // Create alert if red flags detected
+    if (redFlagResult.hasRedFlags) {
       await prisma.alert.create({
         data: {
           patientId,
-          level: alertInfo.level,
-          reason: alertInfo.reason
+          level: redFlagResult.level,
+          reason: redFlagResult.summary + " Detected: " + redFlagResult.flags.map(f => f.symptom).join(", ")
         }
       });
     }
@@ -145,7 +143,11 @@ Return ONLY the JSON object, no additional text.`;
         language: session.language,
         createdAt: session.createdAt
       },
-      alert: alertInfo
+      alert: redFlagResult.hasRedFlags ? {
+        level: redFlagResult.level,
+        reason: redFlagResult.summary
+      } : { level: "NORMAL", reason: "No critical symptoms detected" },
+      redFlags: redFlagResult
     });
 
   } catch (error) {

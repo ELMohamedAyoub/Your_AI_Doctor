@@ -5,16 +5,16 @@ import { RiInstagramFill } from "react-icons/ri";
 export const BLUR_FADE_DELAY = 0.15;
 
 export const siteConfig = {
-  name: "Doctor.ai",
-  description: "AI-powered medical assistant with voice conversation",
+  name: "Your AI Doctor",
+  description: "AI-powered post-surgery recovery assistant with voice monitoring, medication reminders, and real-time health tracking",
   url: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
-  keywords: ["Medical AI", "Voice Assistant", "Healthcare", "AI Doctor", "Medical Consultation"],
+  keywords: ["Post-Surgery Care", "Medical AI", "Voice Assistant", "Healthcare Monitoring", "Recovery Tracking", "Medication Reminders"],
   links: {
-    email: "support@doctorai.com",
-    twitter: "https://twitter.com/doctorai",
-    discord: "https://discord.gg/doctorai",
-    github: "https://github.com/doctorai/doctor-ai-agent",
-    instagram: "https://instagram.com/doctorai/",
+    email: "support@youraidoctor.com",
+    twitter: "https://twitter.com/youraidoctor",
+    discord: "https://discord.gg/youraidoctor",
+    github: "https://github.com/ELMohamedAyoub/Your_AI_Doctor",
+    instagram: "https://instagram.com/youraidoctor/",
   },
   header: [
     {

@@ -5,6 +5,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import VoiceMonitoring from "../dashboard/_components/VoiceMonitoring";
 import AIDoctorChat from "../dashboard/_components/AIDoctorChat";
+import ChatHistory from "../dashboard/_components/ChatHistory";
+import DailyTracker from "../dashboard/_components/DailyTracker";
+import MedicationReminders from "../dashboard/_components/MedicationReminders";
+import RiskScore from "../dashboard/_components/RiskScore";
 import { useRouter } from "next/navigation";
 import { getSurgeryBaseline } from "@/lib/surgeryBaselines";
 
@@ -214,6 +218,29 @@ export default function PatientDashboard() {
             onSessionUpdate={handleSessionComplete}
           />
         </div>
+      </div>
+
+      {/* Daily Tracking & Medication - NEW */}
+      <div className="grid md:grid-cols-2 gap-6 mb-6">
+        <DailyTracker 
+          patientId={status.patient.id}
+          daysSinceSurgery={status.daysSinceSurgery}
+        />
+        <MedicationReminders patientId={status.patient.id} />
+      </div>
+
+      {/* Risk Score - NEW */}
+      <div className="mb-6">
+        <RiskScore 
+          patientId={status.patient.id}
+          surgeryType={status.patient.surgery}
+          currentPainScore={status.lastSession?.painScore || 0}
+        />
+      </div>
+
+      {/* Chat History */}
+      <div className="mt-6">
+        <ChatHistory patientId={status.patient.id} />
       </div>
 
       {/* Recovery Guidelines */}

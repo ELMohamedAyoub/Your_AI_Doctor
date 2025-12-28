@@ -21,14 +21,8 @@ export default function Footer() {
           </div>
 
           <div className="flex items-center space-x-6">
-            <Link href="https://x.com/sumamakhan761" aria-label="Twitter" className="text-muted-foreground hover:text-primary transition-colors">
-              <FaTwitter size={20} />
-            </Link>
-            <Link href="https://linkedin.com/in/sumama-khan" aria-label="LinkedIn" className="text-muted-foreground hover:text-primary transition-colors">
-              <FaLinkedin size={20} />
-            </Link>
-            <Link href="https://sumama-portfolio-gold.vercel.app" aria-label="Portfolio" className="text-muted-foreground hover:text-primary transition-colors">
-              <CgWebsite size={20} />
+            <Link href="https://github.com/ELMohamedAyoub/Your_AI_Doctor" aria-label="GitHub" className="text-muted-foreground hover:text-primary transition-colors">
+              <FaGithub size={20} />
             </Link>
           </div>
         </div>

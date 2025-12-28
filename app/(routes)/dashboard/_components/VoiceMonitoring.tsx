@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Mic, Square, Loader2, CheckCircle, AlertCircle, MessageCircle } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import RedFlagAlert from "./RedFlagAlert";
+import type { RedFlagResult } from "@/lib/redFlagDetector";
 
 interface VoiceMonitoringProps {
   patientId: string;
@@ -34,10 +36,12 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
   const [currentTranscript, setCurrentTranscript] = useState("");
   const [error, setError] = useState("");
   const [isInteractive, setIsInteractive] = useState(false);
+  const [redFlags, setRedFlags] = useState<RedFlagResult | null>(null);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const speakQuestion = (question: string) => {
     const utterance = new SpeechSynthesisUtterance(question);
@@ -70,20 +74,24 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
   };
 
   const moveToNextStep = (transcript: string) => {
+    console.log("moveToNextStep called with:", transcript, "currentStep:", currentStep);
     const updatedData = { ...checkInData };
     updatedData.fullTranscript += transcript + " ";
 
     if (currentStep === "pain") {
+      console.log("Moving from pain to symptoms");
       updatedData.pain = transcript;
       setCheckInData(updatedData);
       setCurrentStep("symptoms");
       speakQuestion(QUESTIONS.symptoms);
     } else if (currentStep === "symptoms") {
+      console.log("Moving from symptoms to mood");
       updatedData.symptoms = transcript;
       setCheckInData(updatedData);
       setCurrentStep("mood");
       speakQuestion(QUESTIONS.mood);
     } else if (currentStep === "mood") {
+      console.log("Completing check-in");
       updatedData.mood = transcript;
       setCheckInData(updatedData);
       setCurrentStep("complete");
@@ -112,6 +120,11 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
       }
 
       const result = await clinicalResponse.json();
+
+      // Store red flags if detected
+      if (result.redFlags && result.redFlags.hasRedFlags) {
+        setRedFlags(result.redFlags);
+      }
 
       // Speak completion message
       const completionMessage = `Thank you for completing your check-in. Your responses have been recorded. ${
@@ -172,6 +185,12 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
 
       mediaRecorder.start();
       setIsRecording(true);
+      
+      // Auto-stop recording after 10 seconds
+      recordingTimeoutRef.current = setTimeout(() => {
+        stopRecording();
+      }, 10000);
+      
     } catch (err) {
       console.error("Error starting recording:", err);
       setError("Could not access microphone. Please check permissions.");
@@ -179,6 +198,10 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
   };
 
   const stopRecording = () => {
+    if (recordingTimeoutRef.current) {
+      clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
+    }
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
@@ -190,24 +213,33 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
     setError("");
 
     try {
+      console.log("Processing audio blob, size:", audioBlob.size);
+      
       // Transcribe audio
       const formData = new FormData();
       formData.append("audio", audioBlob);
 
+      console.log("Sending to /api/transcribe...");
       const transcribeResponse = await fetch("/api/transcribe", {
         method: "POST",
         body: formData,
       });
 
+      console.log("Transcribe response status:", transcribeResponse.status);
+      
       if (!transcribeResponse.ok) {
-        throw new Error("Transcription failed");
+        const errorText = await transcribeResponse.text();
+        console.error("Transcription error:", errorText);
+        throw new Error(`Transcription failed: ${errorText}`);
       }
 
       const { transcript: text } = await transcribeResponse.json();
+      console.log("Transcription result:", text);
       setCurrentTranscript(text);
 
       if (isInteractive && currentStep && currentStep !== "complete") {
         // Move to next step in interactive mode
+        console.log("Moving to next step with transcript:", text);
         moveToNextStep(text);
       } else {
         // Process as single voice check-in
@@ -225,6 +257,11 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
         }
 
         const result = await clinicalResponse.json();
+        
+        // Store red flags if detected
+        if (result.redFlags && result.redFlags.hasRedFlags) {
+          setRedFlags(result.redFlags);
+        }
         
         // Call onSubmit callback if provided
         if (onSubmit) {
@@ -256,6 +293,14 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Red Flag Alert */}
+        {redFlags && redFlags.hasRedFlags && (
+          <RedFlagAlert 
+            result={redFlags} 
+            onDismiss={() => setRedFlags(null)} 
+          />
+        )}
+
         {/* Interactive Mode Controls */}
         {!isInteractive && !isRecording && !isProcessing && (
           <div className="grid grid-cols-2 gap-2">
@@ -305,9 +350,28 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
                 {currentStep === "mood" && QUESTIONS.mood}
               </p>
               {isRecording && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-blue-700">
+                      <div className="h-2 w-2 bg-red-500 rounded-full animate-pulse" />
+                      <span className="text-xs">Listening... (Speak now, auto-stops in 10s)</span>
+                    </div>
+                  </div>
+                  <Button
+                    onClick={stopRecording}
+                    size="sm"
+                    variant="destructive"
+                    className="w-full"
+                  >
+                    <Square className="mr-2 h-4 w-4" />
+                    Stop & Continue
+                  </Button>
+                </div>
+              )}
+              {isProcessing && (
                 <div className="flex items-center gap-2 text-blue-700">
-                  <div className="h-2 w-2 bg-red-500 rounded-full animate-pulse" />
-                  <span className="text-xs">Listening...</span>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span className="text-xs">Processing your response...</span>
                 </div>
               )}
             </div>

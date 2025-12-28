@@ -31,6 +31,8 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
   const [isConversationMode, setIsConversationMode] = useState(false);
   const [autoPlayVoice, setAutoPlayVoice] = useState(true);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState<"en" | "fr" | null>(null);
+  const [showLanguageSelection, setShowLanguageSelection] = useState(false);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -73,27 +75,70 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
     }
   };
 
-  const speakText = async (text: string) => {
+  const speakText = async (text: string, forceStartRecording = false) => {
     setIsSpeaking(true);
-    try {
-      // Use browser's text-to-speech as fallback
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "en-US";
-      utterance.rate = 0.9;
-      utterance.onend = () => {
-        setIsSpeaking(false);
-        // Auto-start recording after speech in conversation mode
-        if (isConversationMode && autoPlayVoice) {
-          setTimeout(() => {
-            startVoiceRecording();
-          }, 500);
+    
+    return new Promise<void>((resolve) => {
+      try {
+        // Use browser's text-to-speech
+        const utterance = new SpeechSynthesisUtterance(text);
+        
+        // Set language and voice based on selected language
+        if (selectedLanguage === "fr") {
+          utterance.lang = "fr-FR";
+          // Try to get a French voice
+          const voices = window.speechSynthesis.getVoices();
+          const frenchVoice = voices.find(voice => 
+            voice.lang.startsWith('fr') && voice.name.includes('Google')
+          ) || voices.find(voice => voice.lang.startsWith('fr'));
+          if (frenchVoice) {
+            utterance.voice = frenchVoice;
+          }
+        } else {
+          utterance.lang = "en-US";
+          const voices = window.speechSynthesis.getVoices();
+          const englishVoice = voices.find(voice => 
+            voice.lang.startsWith('en') && voice.name.includes('Google')
+          ) || voices.find(voice => voice.lang.startsWith('en'));
+          if (englishVoice) {
+            utterance.voice = englishVoice;
+          }
         }
-      };
-      window.speechSynthesis.speak(utterance);
-    } catch (error) {
-      console.error("Error with text-to-speech:", error);
-      setIsSpeaking(false);
-    }
+        
+        utterance.rate = 0.9;
+        utterance.pitch = 1.0;
+        
+        utterance.onend = () => {
+          setIsSpeaking(false);
+          // Auto-start recording after speech in conversation mode
+          if ((isConversationMode || forceStartRecording) && autoPlayVoice) {
+            setTimeout(() => {
+              startVoiceRecording();
+              resolve();
+            }, 500);
+          } else {
+            resolve();
+          }
+        };
+        utterance.onerror = () => {
+          setIsSpeaking(false);
+          resolve();
+        };
+        
+        // Ensure voices are loaded
+        if (window.speechSynthesis.getVoices().length === 0) {
+          window.speechSynthesis.onvoiceschanged = () => {
+            window.speechSynthesis.speak(utterance);
+          };
+        } else {
+          window.speechSynthesis.speak(utterance);
+        }
+      } catch (error) {
+        console.error("Error with text-to-speech:", error);
+        setIsSpeaking(false);
+        resolve();
+      }
+    });
   };
 
   const sendTextMessage = async () => {
@@ -119,7 +164,8 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMessage,
-          patientId
+          patientId,
+          language: selectedLanguage || "en"
         })
       });
 
@@ -215,19 +261,29 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
 
   const startConversation = async () => {
     setIsConversationMode(true);
+    setShowLanguageSelection(false);
     
-    // Send initial greeting
+    // Send initial greeting based on language
+    const greetingText = selectedLanguage === "fr"
+      ? "Bonjour! Je suis votre assistant médical. Comment vous sentez-vous aujourd'hui? Parlez-moi de vos symptômes ou de vos préoccupations."
+      : "Hello! I'm your AI doctor assistant. How are you feeling today? Please tell me about your symptoms or any concerns you have.";
+    
     const greeting: ChatMessage = {
       id: Date.now().toString(),
       role: "doctor",
-      message: "Hello! I'm your AI doctor assistant. How are you feeling today? Please tell me about your symptoms or any concerns you have.",
+      message: greetingText,
       createdAt: new Date().toISOString()
     };
     setMessages([greeting]);
     
-    // Speak the greeting
+    // Speak the greeting and then start recording
     if (autoPlayVoice) {
-      await speakText(greeting.message);
+      await speakText(greeting.message, true); // Force start recording after greeting
+    } else {
+      // If auto voice is off, just start recording
+      setTimeout(() => {
+        startVoiceRecording();
+      }, 500);
     }
   };
 
@@ -245,9 +301,10 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
     setIsProcessing(true);
 
     try {
-      // Step 1: Transcribe audio
+      // Step 1: Transcribe audio with language hint
       const formData = new FormData();
       formData.append("audio", audioBlob);
+      formData.append("language", selectedLanguage || "auto");  // Pass language hint
 
       const transcribeResponse = await fetch("/api/transcribe", {
         method: "POST",
@@ -273,7 +330,8 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: transcript,
-          patientId
+          patientId,
+          language: selectedLanguage || "en"
         })
       });
 
@@ -342,9 +400,43 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Language Selection */}
+        {!isConversationMode && !selectedLanguage && (
+          <div className="space-y-3">
+            <div className="text-center">
+              <h3 className="text-lg font-semibold mb-2">Choose Your Language</h3>
+              <p className="text-sm text-gray-600 mb-4">Choisissez votre langue</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                onClick={() => setSelectedLanguage("en")}
+                size="lg"
+                variant="outline"
+                className="h-20"
+              >
+                <div className="text-center">
+                  <div className="text-2xl mb-1">🇬🇧</div>
+                  <div className="font-semibold">English</div>
+                </div>
+              </Button>
+              <Button
+                onClick={() => setSelectedLanguage("fr")}
+                size="lg"
+                variant="outline"
+                className="h-20"
+              >
+                <div className="text-center">
+                  <div className="text-2xl mb-1">🇫🇷</div>
+                  <div className="font-semibold">Français</div>
+                </div>
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Conversation Mode Controls */}
-        {!isConversationMode ? (
-          <div className="flex gap-2">
+        {!isConversationMode && selectedLanguage ? (
+          <div className="flex flex-col gap-2">
             <Button
               onClick={startConversation}
               size="lg"
@@ -352,10 +444,17 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
               disabled={isProcessing || isSendingMessage}
             >
               <Phone className="mr-2 h-5 w-5" />
-              Start Voice Conversation
+              {selectedLanguage === "fr" ? "Démarrer la conversation vocale" : "Start Voice Conversation"}
+            </Button>
+            <Button
+              onClick={() => setSelectedLanguage(null)}
+              size="sm"
+              variant="ghost"
+            >
+              {selectedLanguage === "fr" ? "Changer de langue" : "Change Language"}
             </Button>
           </div>
-        ) : (
+        ) : isConversationMode ? (
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between p-4 bg-green-50 border border-green-200 rounded-lg">
               <div className="flex items-center gap-2">
@@ -363,7 +462,7 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
                 <span className="text-sm font-medium text-green-800">
                   {isSpeaking ? "Doctor is speaking..." : 
                    isRecording ? "Listening to you..." : 
-                   isProcessing ? "Processing..." : "Ready"}
+                   isProcessing ? "Processing..." : "Ready to speak"}
                 </span>
               </div>
               <Button
@@ -375,10 +474,37 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
                 End Conversation
               </Button>
             </div>
+            
+            {/* Manual recording button when not auto-recording */}
+            {!isRecording && !isSpeaking && !isProcessing && (
+              <Button
+                onClick={startVoiceRecording}
+                variant="outline"
+                size="sm"
+                className="w-full"
+              >
+                <Mic className="mr-2 h-4 w-4" />
+                Click to Speak
+              </Button>
+            )}
+            
+            {/* Stop recording button */}
+            {isRecording && (
+              <Button
+                onClick={stopVoiceRecording}
+                variant="destructive"
+                size="sm"
+                className="w-full"
+              >
+                <Square className="mr-2 h-4 w-4" />
+                Stop Speaking
+              </Button>
+            )}
           </div>
-        )}
+        ) : null}
 
         {/* Chat Messages */}
+        {selectedLanguage && (
         <ScrollArea 
           ref={scrollRef}
           className="h-[400px] w-full rounded-md border p-4"
@@ -433,9 +559,10 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
             </div>
           )}
         </ScrollArea>
+        )}
 
         {/* Manual Input Area */}
-        {!isConversationMode && (
+        {!isConversationMode && selectedLanguage && (
           <div className="flex gap-2">
             <Input
               value={inputMessage}

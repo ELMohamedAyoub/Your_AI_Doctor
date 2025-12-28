@@ -4,9 +4,9 @@ export async function POST(req: NextRequest) {
   try {
     console.log("Transcription API called")
 
-
     const formData = await req.formData()
     const audioFile = formData.get('audio') as File
+    const language = formData.get('language') as string || 'auto'  // Get language hint
 
     if (!audioFile) {
       console.log("No audio file provided")
@@ -15,7 +15,6 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       )
     }
-
 
     const apiKey = process.env.ASSEMBLYAI_API_KEY || process.env.NEXT_PUBLIC_ASSEMBLYAI_API_KEY
 
@@ -60,16 +59,31 @@ export async function POST(req: NextRequest) {
 
     console.log("Audio uploaded successfully, requesting transcription...")
 
+    // Build transcription config based on language
+    const transcriptionConfig: any = {
+      audio_url: upload_url,
+    };
 
+    // If language is specified (fr or en), use it directly; otherwise enable auto-detection
+    if (language === 'fr') {
+      transcriptionConfig.language_code = 'fr';  // French
+      console.log("Using French transcription");
+    } else if (language === 'en') {
+      transcriptionConfig.language_code = 'en';  // English
+      console.log("Using English transcription");
+    } else {
+      transcriptionConfig.language_detection = true;  // Auto-detect
+      console.log("Using automatic language detection");
+    }
+
+    // Request transcription with language configuration
     const transcriptResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
       method: 'POST',
       headers: {
         'Authorization': apiKey,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        audio_url: upload_url
-      })
+      body: JSON.stringify(transcriptionConfig)
     })
 
     if (!transcriptResponse.ok) {

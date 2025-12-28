@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { message, patientId } = await request.json();
+    const { message, patientId, language = "en" } = await request.json();
 
     if (!message || !patientId) {
       return NextResponse.json(
@@ -52,19 +52,25 @@ export async function POST(request: NextRequest) {
     const relevantGuidelines = searchGuidelines(message, patient.surgery, 2);
     const criticalGuidelines = getCriticalGuidelines(patient.surgery).slice(0, 1);
     
-    // Build RAG context with sources
+    // Build RAG context - make it feel natural, not quoted
     const guidelinesContext = relevantGuidelines.length > 0
-      ? `\n\nRELEVANT MEDICAL GUIDELINES (cite these sources in your response):\n${relevantGuidelines.map(g => 
-          `[${g.source || 'Medical Guidelines'}] ${g.title}:\n${g.content}`
+      ? `\n\nMEDICAL KNOWLEDGE BASE (use this to inform your response naturally, don't cite directly):\n${relevantGuidelines.map(g => 
+          `From ${g.source}: ${g.content}`
         ).join('\n\n')}`
       : '';
 
     const criticalWarnings = criticalGuidelines.length > 0
-      ? `\n\nCRITICAL SAFETY INFORMATION:\n${criticalGuidelines.map(g => `[${g.source || 'Medical Guidelines'}] ${g.content}`).join('\n')}`
+      ? `\n\nIMPORTANT SAFETY INFORMATION TO CONSIDER:\n${criticalGuidelines.map(g => g.content).join('\n')}`
       : '';
 
     // AI Doctor prompt
+    const languageInstruction = language === "fr" 
+      ? "IMPORTANT: Respond ONLY in French. Use natural, conversational French." 
+      : "IMPORTANT: Respond ONLY in English.";
+
     const systemPrompt = `You are an AI medical assistant helping patients recover from surgery.
+
+${languageInstruction}
 
 Patient Information:
 - Surgery Type: ${patient.surgery}
@@ -75,17 +81,32 @@ ${guidelinesContext}
 ${criticalWarnings}
 
 Your role:
-1. Provide compassionate, supportive responses based on EVIDENCE from the medical guidelines above
-2. Give post-surgical care advice specific to ${patient.surgery}
-3. Monitor recovery progress and compare to normal recovery timeline
-4. Alert if concerning symptoms (reference the critical safety information)
-5. Encourage medication adherence and rest
-6. Respond in the same language as the patient (French or English)
-7. ALWAYS cite specific guidelines when giving medical advice
-8. If patient describes critical symptoms, strongly urge them to contact their surgeon or go to ER
+1. Provide compassionate, supportive responses using your medical knowledge
+2. Use the medical knowledge base above to inform your advice (speak naturally as a doctor would, don't say "according to" or "based on guidelines")
+3. Give post-surgical care advice specific to ${patient.surgery}
+4. Monitor recovery progress and compare to normal recovery timeline
+5. Alert if concerning symptoms (based on the critical safety information)
+6. Encourage medication adherence and rest
+7. If patient describes critical symptoms, strongly urge them to contact their surgeon or go to ER
 
-Be warm, empathetic, and professional. Keep responses concise (3-4 sentences).
-Base your advice on the medical guidelines provided above.`;
+RESPONSE STRUCTURE - Make your responses more helpful by including:
+1. **Acknowledgment** - Show empathy and validate their concern
+2. **Assessment** - Based on symptoms and recovery timeline, is this normal or concerning?
+3. **Specific Advice** - Clear, actionable steps:
+   - Pain management (specific medications, dosages if appropriate)
+   - Self-care measures (ice/heat, elevation, rest)
+   - Activity modifications
+4. **Red Flags** - When to seek immediate medical attention (fever, severe swelling, etc.)
+5. **Follow-up** - Timeline expectations and when to contact their surgeon
+
+PAIN SCALE CONTEXT:
+- 1-3/10: Mild discomfort (normal post-op)
+- 4-6/10: Moderate pain (may need medication adjustment)
+- 7-10/10: Severe pain (requires medical evaluation)
+
+Keep responses conversational but comprehensive (5-7 sentences). Prioritize patient safety.
+Think critically and use your medical reasoning - the knowledge base is there to support you, not to be quoted.
+${language === "fr" ? "Répondez UNIQUEMENT en français naturel." : "Respond ONLY in English."}`;
 
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
@@ -94,7 +115,7 @@ Base your advice on the medical guidelines provided above.`;
         { role: "user", content: message }
       ],
       temperature: 0.7,
-      max_tokens: 400  // Increased for guideline-based responses
+      max_tokens: 600  // Increased for comprehensive, structured responses
     });
 
     const doctorResponse = response.choices[0]?.message?.content || "I'm here to help. Please tell me more about how you're feeling.";

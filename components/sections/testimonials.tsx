@@ -165,7 +165,7 @@ const testimonials = [
     ),
   },
   {
-    name: "Aisha Khan",
+    name: "Aisha Rahman",
     role: "International Traveler",
     img: "https://randomuser.me/api/portraits/women/56.jpg",
     description: (
