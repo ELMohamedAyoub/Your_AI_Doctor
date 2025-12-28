@@ -3,9 +3,11 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Mic, Square, Loader2, Send, Volume2 } from "lucide-react";
+import { Mic, Square, Loader2, Send, Volume2, Phone, PhoneOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 
 interface ChatMessage {
   id: string;
@@ -26,11 +28,15 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [isConversationMode, setIsConversationMode] = useState(false);
+  const [autoPlayVoice, setAutoPlayVoice] = useState(true);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
@@ -39,10 +45,54 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
     }
   }, [messages]);
 
-  const playAudio = (url: string) => {
+  // Handle audio playback with auto-start next recording
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.onplay = () => setIsSpeaking(true);
+      audioRef.current.onended = () => {
+        setIsSpeaking(false);
+        // Auto-start recording after doctor finishes speaking in conversation mode
+        if (isConversationMode && autoPlayVoice) {
+          setTimeout(() => {
+            startVoiceRecording();
+          }, 500);
+        }
+      };
+    }
+  }, [isConversationMode, autoPlayVoice]);
+
+  const playAudio = async (url: string) => {
     if (audioRef.current) {
       audioRef.current.src = url;
-      audioRef.current.play();
+      try {
+        await audioRef.current.play();
+      } catch (error) {
+        console.error("Error playing audio:", error);
+        setIsSpeaking(false);
+      }
+    }
+  };
+
+  const speakText = async (text: string) => {
+    setIsSpeaking(true);
+    try {
+      // Use browser's text-to-speech as fallback
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "en-US";
+      utterance.rate = 0.9;
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        // Auto-start recording after speech in conversation mode
+        if (isConversationMode && autoPlayVoice) {
+          setTimeout(() => {
+            startVoiceRecording();
+          }, 500);
+        }
+      };
+      window.speechSynthesis.speak(utterance);
+    } catch (error) {
+      console.error("Error with text-to-speech:", error);
+      setIsSpeaking(false);
     }
   };
 
@@ -87,9 +137,14 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
       };
       setMessages(prev => [...prev, doctorMessage]);
 
-      // Play audio response if available
-      if (data.audioUrl) {
-        playAudio(data.audioUrl);
+      // Play audio response automatically if enabled
+      if (autoPlayVoice) {
+        if (data.audioUrl) {
+          await playAudio(data.audioUrl);
+        } else {
+          // Fallback to text-to-speech
+          await speakText(data.response);
+        }
       }
 
       // Trigger session update
@@ -112,6 +167,8 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
   };
 
   const startVoiceRecording = async () => {
+    if (isSpeaking) return; // Don't start recording while doctor is speaking
+    
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -132,6 +189,13 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
 
       mediaRecorder.start();
       setIsRecording(true);
+
+      // Auto-stop after 10 seconds of silence in conversation mode
+      if (isConversationMode) {
+        silenceTimeoutRef.current = setTimeout(() => {
+          stopVoiceRecording();
+        }, 10000);
+      }
     } catch (err) {
       console.error("Error starting recording:", err);
       alert("Could not access microphone");
@@ -139,10 +203,42 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
   };
 
   const stopVoiceRecording = () => {
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = null;
+    }
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
     }
+  };
+
+  const startConversation = async () => {
+    setIsConversationMode(true);
+    
+    // Send initial greeting
+    const greeting: ChatMessage = {
+      id: Date.now().toString(),
+      role: "doctor",
+      message: "Hello! I'm your AI doctor assistant. How are you feeling today? Please tell me about your symptoms or any concerns you have.",
+      createdAt: new Date().toISOString()
+    };
+    setMessages([greeting]);
+    
+    // Speak the greeting
+    if (autoPlayVoice) {
+      await speakText(greeting.message);
+    }
+  };
+
+  const endConversation = () => {
+    setIsConversationMode(false);
+    stopVoiceRecording();
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
   };
 
   const processVoiceMessage = async (audioBlob: Blob) => {
@@ -195,9 +291,13 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
       };
       setMessages(prev => [...prev, doctorMessage]);
 
-      // Play audio response
-      if (data.audioUrl) {
-        playAudio(data.audioUrl);
+      // Play audio response automatically
+      if (autoPlayVoice) {
+        if (data.audioUrl) {
+          await playAudio(data.audioUrl);
+        } else {
+          await speakText(data.response);
+        }
       }
 
       // Trigger session update
@@ -208,6 +308,12 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
     } catch (error) {
       console.error("Error processing voice:", error);
       alert("Failed to process your message. Please try again.");
+      // Resume recording in conversation mode on error
+      if (isConversationMode && autoPlayVoice) {
+        setTimeout(() => {
+          startVoiceRecording();
+        }, 1000);
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -216,12 +322,62 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
   return (
     <Card>
       <CardHeader>
-        <CardTitle>AI Doctor Assistant</CardTitle>
-        <CardDescription>
-          Ask questions about your recovery or describe your symptoms
-        </CardDescription>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle>AI Doctor Assistant</CardTitle>
+            <CardDescription>
+              {isConversationMode 
+                ? "Continuous voice conversation active" 
+                : "Ask questions about your recovery or describe your symptoms"}
+            </CardDescription>
+          </div>
+          <div className="flex items-center gap-2">
+            <Switch
+              id="auto-voice"
+              checked={autoPlayVoice}
+              onCheckedChange={setAutoPlayVoice}
+            />
+            <Label htmlFor="auto-voice" className="text-xs">Auto Voice</Label>
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Conversation Mode Controls */}
+        {!isConversationMode ? (
+          <div className="flex gap-2">
+            <Button
+              onClick={startConversation}
+              size="lg"
+              className="w-full"
+              disabled={isProcessing || isSendingMessage}
+            >
+              <Phone className="mr-2 h-5 w-5" />
+              Start Voice Conversation
+            </Button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between p-4 bg-green-50 border border-green-200 rounded-lg">
+              <div className="flex items-center gap-2">
+                <div className="h-3 w-3 bg-green-500 rounded-full animate-pulse" />
+                <span className="text-sm font-medium text-green-800">
+                  {isSpeaking ? "Doctor is speaking..." : 
+                   isRecording ? "Listening to you..." : 
+                   isProcessing ? "Processing..." : "Ready"}
+                </span>
+              </div>
+              <Button
+                onClick={endConversation}
+                variant="destructive"
+                size="sm"
+              >
+                <PhoneOff className="mr-2 h-4 w-4" />
+                End Conversation
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Chat Messages */}
         <ScrollArea 
           ref={scrollRef}
@@ -229,7 +385,10 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
         >
           {messages.length === 0 ? (
             <div className="flex items-center justify-center h-full text-gray-500">
-              <p>Start a conversation with your AI doctor</p>
+              <div className="text-center space-y-2">
+                <p>Start a voice conversation for a natural back-and-forth chat</p>
+                <p className="text-xs">Or use the text/voice buttons below for manual control</p>
+              </div>
             </div>
           ) : (
             <div className="space-y-4">
@@ -245,56 +404,67 @@ export default function AIDoctorChat({ patientId, onSessionUpdate }: AIDoctorCha
                         : "bg-gray-200 text-gray-900"
                     }`}
                   >
-                    <p className="text-sm">{msg.message}</p>
-                    {msg.audioUrl && msg.role === "doctor" && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="mt-2 p-1 h-auto"
-                        onClick={() => playAudio(msg.audioUrl!)}
-                      >
-                        <Volume2 className="h-4 w-4" />
-                      </Button>
-                    )}
+                    <div className="flex items-start gap-2">
+                      <p className="text-sm flex-1">{msg.message}</p>
+                      {msg.audioUrl && msg.role === "doctor" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="p-1 h-auto shrink-0"
+                          onClick={() => playAudio(msg.audioUrl!)}
+                        >
+                          <Volume2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
                     <p className="text-xs mt-1 opacity-70">
                       {new Date(msg.createdAt).toLocaleTimeString()}
                     </p>
                   </div>
                 </div>
               ))}
+              {isProcessing && (
+                <div className="flex justify-start">
+                  <div className="bg-gray-200 rounded-lg p-3">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </ScrollArea>
 
-        {/* Input Area */}
-        <div className="flex gap-2">
-          <Input
-            value={inputMessage}
-            onChange={(e) => setInputMessage(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && sendTextMessage()}
-            placeholder="Type your message..."
-            disabled={isRecording || isProcessing || isSendingMessage}
-          />
-          <Button
-            onClick={sendTextMessage}
-            disabled={!inputMessage.trim() || isRecording || isProcessing || isSendingMessage}
-          >
-            {isSendingMessage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
-          <Button
-            variant={isRecording ? "destructive" : "default"}
-            onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
-            disabled={isProcessing || isSendingMessage}
-          >
-            {isProcessing ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : isRecording ? (
-              <Square className="h-4 w-4" />
-            ) : (
-              <Mic className="h-4 w-4" />
-            )}
-          </Button>
-        </div>
+        {/* Manual Input Area */}
+        {!isConversationMode && (
+          <div className="flex gap-2">
+            <Input
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              onKeyPress={(e) => e.key === "Enter" && sendTextMessage()}
+              placeholder="Type your message..."
+              disabled={isRecording || isProcessing || isSendingMessage}
+            />
+            <Button
+              onClick={sendTextMessage}
+              disabled={!inputMessage.trim() || isRecording || isProcessing || isSendingMessage}
+            >
+              {isSendingMessage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+            <Button
+              variant={isRecording ? "destructive" : "default"}
+              onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+              disabled={isProcessing || isSendingMessage}
+            >
+              {isProcessing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : isRecording ? (
+                <Square className="h-4 w-4" />
+              ) : (
+                <Mic className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+        )}
 
         {/* Hidden audio element for playing responses */}
         <audio ref={audioRef} className="hidden" />
