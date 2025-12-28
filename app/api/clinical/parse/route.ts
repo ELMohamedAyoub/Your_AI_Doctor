@@ -41,11 +41,36 @@ function detectAlertLevel(painScore: number, symptoms: string[], emotion: string
 }
 
 export async function POST(request: NextRequest) {
+  console.log("[Clinical Parse] === NEW REQUEST ===");
+  console.log("[Clinical Parse] Request headers:", {
+    contentType: request.headers.get('content-type'),
+    contentLength: request.headers.get('content-length'),
+  });
+
   try {
-    const body = await request.json();
+    let body;
+    try {
+      body = await request.json();
+      console.log("[Clinical Parse] Successfully parsed JSON body");
+    } catch (jsonError) {
+      console.error("[Clinical Parse] Invalid JSON in request body:", jsonError);
+      console.error("[Clinical Parse] JSON parse error details:", {
+        name: jsonError instanceof Error ? jsonError.name : 'Unknown',
+        message: jsonError instanceof Error ? jsonError.message : String(jsonError)
+      });
+      return NextResponse.json(
+        { error: "Invalid request body - must be valid JSON" },
+        { status: 400 }
+      );
+    }
+
     const { transcript, patientId } = body;
 
-    console.log("Clinical parse request:", { transcript: transcript?.substring(0, 100), patientId });
+    console.log("Clinical parse request:", { 
+      transcript: transcript?.substring(0, 100), 
+      patientId,
+      bodyKeys: Object.keys(body)
+    });
 
     if (!transcript || !patientId) {
       console.error("Missing required fields:", { hasTranscript: !!transcript, hasPatientId: !!patientId });
@@ -67,7 +92,13 @@ Extract the following information and return ONLY a valid JSON object:
 }
 
 Rules:
-- painScore: Patient's self-reported pain level (0=no pain, 10=worst pain). If not explicitly stated, infer from description.
+- painScore: Patient's self-reported pain level (0=no pain, 10=worst pain). 
+  * If patient says a number, use it exactly
+  * If patient says "terrible", "awful", "unbearable", "worst pain" → infer 9-10
+  * If patient says "severe", "really bad", "intense" → infer 7-8
+  * If patient says "moderate", "uncomfortable" → infer 4-6
+  * If patient says "mild", "slight", "a little" → infer 2-3
+  * If patient says "no pain", "fine", "better" → infer 0-1
 - symptoms: List all symptoms mentioned (fever, nausea, bleeding, swelling, redness, discharge, difficulty breathing, etc.). Translate French terms to English.
 - emotion: Assess emotional state from language tone and content.
 - language: Detect if transcript is in French (fr) or English (en).
@@ -99,48 +130,80 @@ Return ONLY the JSON object, no additional text.`;
 
     const extractedData = JSON.parse(response.choices[0]?.message?.content || "{}");
     
+    console.log("[Clinical Parse] Extracted data:", {
+      painScore: extractedData.painScore,
+      symptoms: extractedData.symptoms,
+      emotion: extractedData.emotion,
+      language: extractedData.language
+    });
+    
     // Validate extracted data
     if (typeof extractedData.painScore !== 'number' || 
         !Array.isArray(extractedData.symptoms) ||
         !extractedData.emotion ||
         !extractedData.language) {
+      console.error("[Clinical Parse] Invalid extraction format:", extractedData);
       throw new Error("Invalid extraction format");
     }
 
-    // Store session in database
-    const session = await prisma.patientSession.create({
-      data: {
-        patientId,
-        transcript,
-        painScore: extractedData.painScore,
-        symptoms: extractedData.symptoms,
-        emotion: extractedData.emotion,
-        language: extractedData.language
-      }
+    // Convert patientId to Int
+    const patientIdInt = typeof patientId === 'string' ? parseInt(patientId, 10) : patientId;
+    if (isNaN(patientIdInt)) {
+      return NextResponse.json(
+        { error: "Invalid patient ID" },
+        { status: 400 }
+      );
+    }
+
+    // Get patient email for createdBy field
+    const patient = await prisma.user.findUnique({
+      where: { id: patientIdInt },
+      select: { email: true }
     });
+
+    if (!patient) {
+      return NextResponse.json(
+        { error: "Patient not found" },
+        { status: 404 }
+      );
+    }
 
     // Use advanced red flag detection
     const redFlagResult = detectRedFlags(transcript, extractedData.painScore);
+    
+    console.log("[Clinical Parse] Red flag detection result:", {
+      hasRedFlags: redFlagResult.hasRedFlags,
+      level: redFlagResult.level,
+      flagCount: redFlagResult.flags.length,
+      flags: redFlagResult.flags.map(f => ({ symptom: f.symptom, level: f.level }))
+    });
 
-    // Create alert if red flags detected
-    if (redFlagResult.hasRedFlags) {
-      await prisma.alert.create({
-        data: {
-          patientId,
-          level: redFlagResult.level,
-          reason: redFlagResult.summary + " Detected: " + redFlagResult.flags.map(f => f.symptom).join(", ")
-        }
-      });
-    }
+    // Store session in database (using Session model linked to User)
+    const session = await prisma.session.create({
+      data: {
+        sessionId: `voice-${Date.now()}`,
+        notes: `Voice check-in - Pain: ${extractedData.painScore}/10, Emotion: ${extractedData.emotion}`,
+        createdBy: patient.email,
+        createdOn: new Date().toISOString(),
+        patientId: patientIdInt,
+        transcription: transcript,
+        painScore: extractedData.painScore,
+        symptoms: extractedData.symptoms,
+        emotion: extractedData.emotion,
+        language: extractedData.language || 'en', // Save language
+        summary: `Symptoms: ${extractedData.symptoms.join(', ')}`,
+        redFlags: redFlagResult.hasRedFlags ? redFlagResult.flags.map(f => f.symptom) : [],
+      }
+    });
 
     return NextResponse.json({
       success: true,
       session: {
         id: session.id,
         painScore: session.painScore,
-        symptoms: session.symptoms,
+        symptoms: extractedData.symptoms,
         emotion: session.emotion,
-        language: session.language,
+        language: extractedData.language,
         createdAt: session.createdAt
       },
       alert: redFlagResult.hasRedFlags ? {
@@ -151,9 +214,22 @@ Return ONLY the JSON object, no additional text.`;
     });
 
   } catch (error) {
-    console.error("Error in clinical parsing:", error);
+    console.error("[Clinical Parse] Error:", error);
+    
+    // Provide more specific error messages
+    if (error instanceof Error) {
+      console.error("[Clinical Parse] Error details:", {
+        name: error.name,
+        message: error.message,
+        stack: error.stack?.split('\n').slice(0, 3).join('\n')
+      });
+    }
+    
     return NextResponse.json(
-      { error: "Failed to parse clinical data" },
+      { 
+        error: "Failed to parse clinical data",
+        details: error instanceof Error ? error.message : "Unknown error"
+      },
       { status: 500 }
     );
   }

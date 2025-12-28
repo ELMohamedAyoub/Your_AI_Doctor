@@ -37,15 +37,30 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
   const [error, setError] = useState("");
   const [isInteractive, setIsInteractive] = useState(false);
   const [redFlags, setRedFlags] = useState<RedFlagResult | null>(null);
+  const [selectedLanguage, setSelectedLanguage] = useState<"en" | "fr" | null>(null);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  const QUESTIONS_EN = {
+    pain: "On a scale of 0 to 10, how would you rate your pain level right now?",
+    symptoms: "Are you experiencing any new symptoms? Please describe them.",
+    mood: "How are you feeling emotionally today?"
+  };
+
+  const QUESTIONS_FR = {
+    pain: "Sur une échelle de 0 à 10, comment évalueriez-vous votre niveau de douleur en ce moment?",
+    symptoms: "Ressentez-vous de nouveaux symptômes? Veuillez les décrire.",
+    mood: "Comment vous sentez-vous émotionnellement aujourd'hui?"
+  };
+
+  const QUESTIONS = selectedLanguage === "fr" ? QUESTIONS_FR : QUESTIONS_EN;
+
   const speakQuestion = (question: string) => {
     const utterance = new SpeechSynthesisUtterance(question);
-    utterance.lang = "en-US";
+    utterance.lang = selectedLanguage === "fr" ? "fr-FR" : "en-US";
     utterance.rate = 0.9;
     utterance.onend = () => {
       // Auto-start recording after question
@@ -218,6 +233,7 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
       // Transcribe audio
       const formData = new FormData();
       formData.append("audio", audioBlob);
+      formData.append("language", selectedLanguage || "en"); // Pass language
 
       console.log("Sending to /api/transcribe...");
       const transcribeResponse = await fetch("/api/transcribe", {
@@ -301,31 +317,75 @@ export default function VoiceMonitoring({ patientId, onSubmit }: VoiceMonitoring
           />
         )}
 
+        {/* Language Selection - Show if not selected yet and not recording */}
+        {!selectedLanguage && !isRecording && !isProcessing && (
+          <div className="space-y-3">
+            <div className="text-center">
+              <h3 className="text-lg font-semibold mb-2">Choose Language</h3>
+              <p className="text-sm text-gray-600 mb-4">Choisissez la langue</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Button
+                onClick={() => setSelectedLanguage("en")}
+                size="lg"
+                variant="outline"
+                className="h-20"
+              >
+                <div className="text-center">
+                  <div className="text-2xl mb-1">🇬🇧</div>
+                  <div className="font-semibold">English</div>
+                </div>
+              </Button>
+              <Button
+                onClick={() => setSelectedLanguage("fr")}
+                size="lg"
+                variant="outline"
+                className="h-20"
+              >
+                <div className="text-center">
+                  <div className="text-2xl mb-1">🇫🇷</div>
+                  <div className="font-semibold">Français</div>
+                </div>
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Interactive Mode Controls */}
-        {!isInteractive && !isRecording && !isProcessing && (
-          <div className="grid grid-cols-2 gap-2">
+        {selectedLanguage && !isInteractive && !isRecording && !isProcessing && (
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                size="lg"
+                onClick={startRecording}
+                variant="outline"
+                className="h-20"
+              >
+                <Mic className="mr-2 h-6 w-6" />
+                <div className="text-left">
+                  <div className="font-semibold">Quick Check-In</div>
+                  <div className="text-xs text-gray-500">Single recording</div>
+                </div>
+              </Button>
+              <Button
+                size="lg"
+                onClick={startInteractiveCheckIn}
+                className="h-20"
+              >
+                <MessageCircle className="mr-2 h-6 w-6" />
+                <div className="text-left">
+                  <div className="font-semibold">Guided Check-In</div>
+                  <div className="text-xs">Step-by-step</div>
+                </div>
+              </Button>
+            </div>
             <Button
-              size="lg"
-              onClick={startRecording}
-              variant="outline"
-              className="h-20"
+              onClick={() => setSelectedLanguage(null)}
+              variant="ghost"
+              size="sm"
+              className="w-full"
             >
-              <Mic className="mr-2 h-6 w-6" />
-              <div className="text-left">
-                <div className="font-semibold">Quick Check-In</div>
-                <div className="text-xs text-gray-500">Single recording</div>
-              </div>
-            </Button>
-            <Button
-              size="lg"
-              onClick={startInteractiveCheckIn}
-              className="h-20"
-            >
-              <MessageCircle className="mr-2 h-6 w-6" />
-              <div className="text-left">
-                <div className="font-semibold">Guided Check-In</div>
-                <div className="text-xs">Step-by-step</div>
-              </div>
+              Change Language
             </Button>
           </div>
         )}

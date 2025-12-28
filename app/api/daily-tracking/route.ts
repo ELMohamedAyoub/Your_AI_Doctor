@@ -13,14 +13,19 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const patientId = searchParams.get("patientId");
+    const patientIdStr = searchParams.get("patientId");
     const days = parseInt(searchParams.get("days") || "30");
 
-    if (!patientId) {
+    if (!patientIdStr) {
       return NextResponse.json({ error: "Patient ID required" }, { status: 400 });
     }
 
-    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    const patientId = parseInt(patientIdStr, 10);
+    if (isNaN(patientId)) {
+      return NextResponse.json({ error: "Invalid Patient ID" }, { status: 400 });
+    }
+
+    const patient = await prisma.user.findUnique({ where: { id: patientId } });
     if (!patient || patient.clerkUserId !== userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     }
@@ -28,24 +33,29 @@ export async function GET(request: NextRequest) {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - days);
 
-    const sessions = await prisma.session.findMany({
+    const entries = await prisma.dailyTracking.findMany({
       where: {
         patientId,
         createdAt: { gte: cutoffDate }
       },
       orderBy: { createdAt: 'asc' },
       select: {
+        id: true,
         painScore: true,
-        symptoms: true,
-        emotion: true,
+        mobilityScore: true,
+        sleepHours: true,
+        sleepQuality: true,
+        steps: true,
+        exerciseMinutes: true,
+        notes: true,
         createdAt: true
       }
     });
 
-    return NextResponse.json({ sessions });
+    return NextResponse.json({ entries: entries || [] });
   } catch (error) {
     console.error("Error fetching tracking data:", error);
-    return NextResponse.json({ error: "Failed to fetch data" }, { status: 500 });
+    return NextResponse.json({ entries: [] }, { status: 200 });
   }
 }
 
@@ -54,26 +64,44 @@ export async function POST(request: NextRequest) {
   try {
     const { userId } = await auth();
     if (!userId) {
+      console.error("POST daily-tracking: No userId");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { patientId, painScore, mobilityScore, sleepHours, sleepQuality, steps, exerciseMinutes, notes } = await request.json();
+    const body = await request.json();
+    console.log("POST daily-tracking body:", body);
+    
+    const { patientId: patientIdInput, painScore, mobilityScore, sleepHours, sleepQuality, steps, exerciseMinutes, notes } = body;
 
-    const patient = await prisma.patient.findUnique({ where: { id: patientId } });
+    // Convert patientId to number
+    const patientId = typeof patientIdInput === 'string' ? parseInt(patientIdInput, 10) : patientIdInput;
+
+    if (!patientId || isNaN(patientId) || painScore === undefined || mobilityScore === undefined || sleepHours === undefined || sleepQuality === undefined) {
+      console.error("POST daily-tracking: Missing required fields", { patientId, painScore, mobilityScore, sleepHours, sleepQuality });
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    const patient = await prisma.user.findUnique({ where: { id: patientId } });
     if (!patient || patient.clerkUserId !== userId) {
+      console.error("POST daily-tracking: Patient not found or unauthorized", { patientId, userId, found: !!patient, clerkMatch: patient?.clerkUserId === userId });
       return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
     }
 
-    const session = await prisma.session.create({
+    const entry = await prisma.dailyTracking.create({
       data: {
         patientId,
         painScore,
-        symptoms: notes ? [notes] : [],
-        emotion: mobilityScore >= 7 ? "good" : mobilityScore >= 4 ? "okay" : "struggling"
+        mobilityScore,
+        sleepHours,
+        sleepQuality,
+        steps: steps || 0,
+        exerciseMinutes: exerciseMinutes || 0,
+        notes
       }
     });
 
-    return NextResponse.json({ session });
+    console.log("POST daily-tracking: Created entry", entry.id);
+    return NextResponse.json({ entry });
   } catch (error) {
     console.error("Error creating tracking entry:", error);
     return NextResponse.json({ error: "Failed to save data" }, { status: 500 });

@@ -6,6 +6,7 @@ const prisma = new PrismaClient();
 
 export async function GET(request: NextRequest) {
   try {
+    console.log("[Chat History API] Starting request");
     const { userId } = await auth();
     
     if (!userId) {
@@ -15,6 +16,8 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const patientId = searchParams.get("patientId");
 
+    console.log("[Chat History API] Patient ID from params:", patientId);
+
     if (!patientId) {
       return NextResponse.json(
         { error: "Patient ID is required" },
@@ -22,18 +25,30 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Verify patient belongs to this user
-    const patient = await prisma.patient.findUnique({
-      where: { id: patientId }
+    // Convert patientId to Int
+    const patientIdInt = parseInt(patientId, 10);
+    if (isNaN(patientIdInt)) {
+      return NextResponse.json(
+        { error: "Invalid patient ID" },
+        { status: 400 }
+      );
+    }
+
+    // Verify patient belongs to this user (using User model)
+    const patient = await prisma.user.findUnique({
+      where: { id: patientIdInt }
     });
 
+    console.log("[Chat History API] Found patient:", patient?.email);
+
     if (!patient || patient.clerkUserId !== userId) {
+      console.log("[Chat History API] Patient not found or unauthorized");
       return NextResponse.json({ error: "Patient not found" }, { status: 404 });
     }
 
     // Fetch all chat messages for this patient, ordered by creation time
     const messages = await prisma.chatMessage.findMany({
-      where: { patientId },
+      where: { patientId: patientIdInt },
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,
@@ -43,6 +58,8 @@ export async function GET(request: NextRequest) {
         createdAt: true
       }
     });
+
+    console.log("[Chat History API] Found messages:", messages.length);
 
     return NextResponse.json({
       messages,
