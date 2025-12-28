@@ -1,0 +1,92 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id       Int       @id @default(autoincrement())
+  email    String    @unique
+  name     String
+  credit   Int
+}
+
+model Doctor {
+  id           String    @id @default(uuid())
+  clerkUserId  String    @unique
+  name         String
+  specialization String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Patient {
+  id           String    @id @default(uuid())
+  clerkUserId  String    @unique
+  name         String
+  surgery      String    // Appendectomy, Knee Replacement, Cesarean Section
+  surgeryDate  DateTime
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     PatientSession[]
+  alerts       Alert[]
+  chatMessages ChatMessage[]
+}
+
+model ChatMessage {
+  id          String   @id @default(uuid())
+  patientId   String
+  patient     Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  role        String   // "patient" or "doctor"
+  message     String   @db.Text
+  audioUrl    String?  // URL to voice recording (for patient) or TTS audio (for doctor)
+  createdAt   DateTime @default(now())
+  
+  @@index([patientId, createdAt])
+}
+
+model PatientSession {
+  id          String   @id @default(uuid())
+  patientId   String
+  patient     Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  transcript  String   @db.Text
+  painScore   Int      // 0-10
+  symptoms    String[] // Array of symptoms detected
+  emotion     String   // calm, anxious, distressed, etc.
+  language    String   // fr or en
+  createdAt   DateTime @default(now())
+  
+  @@index([patientId, createdAt])
+}
+
+model Alert {
+  id         String   @id @default(uuid())
+  patientId  String
+  patient    Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  level      String   // NORMAL, ORANGE, RED
+  reason     String   @db.Text
+  createdAt  DateTime @default(now())
+  
+  @@index([patientId, level, createdAt])
+}
+
+model Session {
+  id          Int    @id @default(autoincrement())
+  sessionId   String @unique
+  notes       String
+  selectedDocter Json?
+  conversation  Json?
+  report        Json?
+  createdBy   String
+  createdOn   String
+}
